@@ -7,11 +7,15 @@ build
 .vscode
 
 # data
-data
+*data
 checkpoints
 out
+output_data
 wandb
 
 tests/original_falcon_40b.py
 sft/output
 sft/wandb
+
+log*
+*.log

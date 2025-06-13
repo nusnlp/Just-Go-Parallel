@@ -46,7 +46,8 @@ class PackedDataset(IterableDataset):
 
         max_num_files = len(self._filenames) // num_shards * num_shards
         filenames = self._filenames[shard_id:max_num_files:num_shards]
-
+        print('num_workers:{}\n_num_processes:{}\nnum_shards:{}\nmax_files:{}\nFile length:{}'.format(num_workers, self._num_processes, num_shards, max_num_files, len(filenames)), flush=True)
+        print('if there are 8 workers, max files: ', len(self._filenames) // 8 * 8, flush=True)
         return PackedDatasetIterator(
             filenames=filenames,
             n_chunks=self._n_chunks,
@@ -167,23 +168,40 @@ class PackedDatasetIterator:
         self._mmaps = []
         self._buffers = []
 
-        if self._n_chunks > len(self._filenames[self._file_idx :]):
-            # if not self._wrap:
-            #     raise StopIteration
-            self._file_idx = 0
+        # if self._n_chunks > len(self._filenames[self._file_idx :]):
+        #     # if not self._wrap:
+        #     #     raise StopIteration
+        #     self._file_idx = 0
 
+        last_chunk_size = -1
+        n_all_blocks = 0
         for i in range(self._n_chunks):
-            filename = self._filenames[self._file_idx + i]
-            if self._dtype is None:
-                self._dtype, self._chunk_size = self._read_header(filename)
-                self._n_blocks = self._chunk_size // self._block_size
+            # filename = self._filenames[self._file_idx + i]
+            filename = self._filenames[self._file_idx]
+            # if self._dtype is None:
+            self._dtype, self._chunk_size = self._read_header(filename)
+            if last_chunk_size >= 0 and self._chunk_size != last_chunk_size:
+                break
+            self._n_blocks = self._chunk_size // self._block_size
+            n_all_blocks += self._n_blocks
+            print('{} (idx: {}) loaded with dtype {}, chunk size {}, n_blocks {}'.format(
+                filename, self._file_idx, self._dtype, self._chunk_size, self._n_blocks), flush=True)
             # TODO: check header matches with previous files
             mmap = np.memmap(filename, mode="r", order="C", offset=HDR_SIZE)
             self._mmaps.append(mmap)
             self._buffers.append(memoryview(mmap))
+            last_chunk_size = self._chunk_size
+            self._file_idx += 1
+            if self._file_idx >= len(self._filenames):
+                if not self._wrap:
+                    raise StopIteration
+                self._file_idx = 0
 
-        self._file_idx += self._n_chunks
-        n_all_blocks = self._n_chunks * self._n_blocks
+        # self._file_idx += self._n_chunks
+        # n_all_blocks = self._n_chunks * self._n_blocks
+        
+        # print('current idx: {}. n_all_blocks {}, n_chunks {}, n_blocks {}'.format(
+        #     self._file_idx, n_all_blocks, self._n_chunks, self._n_blocks), flush=True)
 
         self._block_idxs = self._rng.permutation(n_all_blocks) if self._shuffle else range(n_all_blocks)
 

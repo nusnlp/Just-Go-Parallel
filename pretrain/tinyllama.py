@@ -23,21 +23,17 @@ from pytorch_lightning.loggers import WandbLogger
 from lit_gpt import FusedCrossEntropyLoss
 import random
 
-model_name = "tiny_LLaMA_1b"
-name = "tinyllama_1b"
-out_dir = Path("out") / name
+
+name = "tinyllama_1b_parallel"
 
 # Hyperparameters
 num_of_devices = 8
-global_batch_size = 512
+global_batch_size = 512 # 1024
 learning_rate = 4e-4
-micro_batch_size = 8
-max_step = 715256 * 2
+micro_batch_size = 16 # 8
 warmup_steps = 2000
 log_step_interval = 10
 eval_iters = 100
-save_step_interval = 5000
-eval_step_interval = 5000
 
 
 weight_decay = 1e-1
@@ -52,18 +48,21 @@ gradient_accumulation_steps = batch_size // micro_batch_size
 assert gradient_accumulation_steps > 0
 warmup_iters = warmup_steps * gradient_accumulation_steps
 
+log_iter_interval = log_step_interval * gradient_accumulation_steps
+logger = step_csv_logger("out", name, flush_logs_every_n_steps=log_iter_interval)
 
 
-
+max_step = 715256 * 2
 max_iters = max_step * gradient_accumulation_steps
 lr_decay_iters = max_iters
-log_iter_interval = log_step_interval * gradient_accumulation_steps
+
 
 
 # Treat all dataset equally by their size. If you want to use a different weight for a dataset, add it to the list with the weight.
 train_data_config = [
-    ("train_slim", 0.693584),
-    ("train_star", 0.306416),
+    ("train_slim", 1.0)
+    # ("train_slim", 0.693584),
+    # ("train_star", 0.306416),
 ]
 
 val_data_config = [
@@ -71,19 +70,29 @@ val_data_config = [
 ]
 
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
-logger = step_csv_logger("out", name, flush_logs_every_n_steps=log_iter_interval)
-wandb_logger = WandbLogger()
 
 
 def setup(
+    model_name: str = "tiny_LLaMA_1b",
     devices: int = 8,
     train_data_dir: Path = Path("data/redpajama_sample"),
     val_data_dir: Optional[Path] = None,
+    parallel_data_dir: Optional[Path] = None,
+    parallel_location: str = "start", 
     precision: Optional[str] = None,
     tpu: bool = False,
     resume: Union[bool, Path] = False,
+    project_name: Optional[str] = "tinyLlama_default",
+    eval_step_interval: Optional[int] = 5000,
+    slim_perc: Optional[float] = 1.0,
+    parallel_upsample: Optional[int] = 1,
+    slim_offset: Optional[int] = 0,
+    ensure_last_parallel: Optional[bool] = False,
+    reset_dataloader: bool = False,
 ) -> None:
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
+    wandb_logger = WandbLogger(project=project_name)
+    out_dir = Path("out") / project_name
 
     if devices > 1:
         if tpu:
@@ -104,12 +113,12 @@ def setup(
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=[logger, wandb_logger])
     fabric.print(hparams)
     #fabric.launch(main, train_data_dir, val_data_dir, resume)
-    main(fabric, train_data_dir, val_data_dir, resume)
+    main(model_name, fabric, train_data_dir, val_data_dir, parallel_data_dir, parallel_location, resume, out_dir, eval_step_interval, slim_perc, reset_dataloader, parallel_upsample, slim_offset, ensure_last_parallel)
 
 
-def main(fabric, train_data_dir, val_data_dir, resume):
+def main(model_name, fabric, train_data_dir, val_data_dir, parallel_data_dir, parallel_location, resume, out_dir, eval_step_interval, slim_perc, reset_dataloader, parallel_upsample, slim_offset, ensure_last_parallel):
     monitor = Monitor(fabric, window_size=2, time_unit="seconds", log_iter_interval=log_iter_interval)
-
+    fabric.print(f"train_data_dir: {train_data_dir}, val_data_dir: {val_data_dir}, parallel_data_dir: {parallel_data_dir}, parallel_location: {parallel_location}, resume: {resume}, out_dir: {out_dir}, eval_step_interval: {eval_step_interval}, slim_perc: {slim_perc}, reset_dataloader: {reset_dataloader}, parallel_upsample: {parallel_upsample}, slim_offset: {slim_offset}, ensure_last_parallel: {ensure_last_parallel}")
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,7 +129,13 @@ def main(fabric, train_data_dir, val_data_dir, resume):
         block_size=config.block_size,
         fabric=fabric,
         train_data_dir=train_data_dir,
+        parallel_data_dir=parallel_data_dir,
+        parallel_location=parallel_location,
         val_data_dir=val_data_dir,
+        slim_perc=slim_perc,
+        slim_offset=slim_offset,
+        parallel_upsample=parallel_upsample,
+        ensure_last_parallel=ensure_last_parallel,
         seed=3407,
     )
     if val_dataloader is None:
@@ -150,19 +165,27 @@ def main(fabric, train_data_dir, val_data_dir, resume):
     state = {"model": model, "optimizer": optimizer, "hparams": hparams, "iter_num": 0, "step_count": 0}
 
     if resume is True:
-        resume = sorted(out_dir.glob("*.pth"))[-1]
+        ckpts = out_dir.glob("*.pth")
+        iters = {int(str(c.name).split('-')[1]):c for c in ckpts}
+        last_iter = sorted(list(iters.keys()))[-1]
+        resume = iters[last_iter]
     if resume :
         fabric.print(f"Resuming training from {resume}")
         fabric.load(resume, state)
 
+    if reset_dataloader:
+        fabric.print(f"Data loader and num iteration reset to the start.")
+        state["iter_num"] = 0
+    
+    fabric.print(torch.cuda.get_device_name(0))
     train_time = time.perf_counter()
-    train(fabric, state, train_dataloader, val_dataloader, monitor, resume)
+    train(fabric, state, train_dataloader, val_dataloader, monitor, resume, out_dir, eval_step_interval)
     fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
     if fabric.device.type == "cuda":
         fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
 
-def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
+def train(fabric, state, train_dataloader, val_dataloader, monitor, resume, out_dir, eval_step_interval):
     model = state["model"]
     optimizer = state["optimizer"]
 
@@ -257,7 +280,7 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
 
             
             
-            
+        num_tokens = model.config.block_size * (state["iter_num"] + 1) * micro_batch_size * fabric.world_size    
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval_step_interval == 0:
             
             t0 = time.perf_counter()
@@ -268,8 +291,8 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
             fabric.log_dict({"metric/val_loss": val_loss.item(), "total_tokens": model.config.block_size * (state["iter_num"] + 1) * micro_batch_size * fabric.world_size}, state["step_count"])
             fabric.log_dict({"metric/val_ppl": math.exp(val_loss.item()), "total_tokens": model.config.block_size * (state["iter_num"] + 1) * micro_batch_size * fabric.world_size}, state["step_count"])
             fabric.barrier()
-        if not is_accumulating and state["step_count"] % save_step_interval == 0:
-            checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
+        if not is_accumulating and state["step_count"] % eval_step_interval == 0:
+            checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-token-{num_tokens}-ckpt.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
 
@@ -299,14 +322,75 @@ def validate(fabric: L.Fabric, model: torch.nn.Module, val_dataloader: DataLoade
 
 
 def create_dataloader(
-    batch_size: int, block_size: int, data_dir: Path, fabric, shuffle: bool = True, seed: int = 12345, split="train"
+    batch_size: int, block_size: int, data_dir: Path, fabric, shuffle: bool = True, seed: int = 12345, split="train",
+    parallel_data_dir: Optional[Path] = None, parallel_location: str = "start", slim_perc: float = 1.0, parallel_upsample: int = 1,
+    slim_offset: int = 0, ensure_last_parallel: bool = False,
 ) -> DataLoader:
     datasets = []
     data_config = train_data_config if split == "train" else val_data_config
     for prefix, _ in data_config:
         filenames = sorted(glob.glob(str(data_dir / f"{prefix}*")))
+        if parallel_data_dir is not None:
+            parallel_files = sorted(glob.glob(str(parallel_data_dir / f"parallel*")))
+            if parallel_upsample > 1:
+                parallel_files = parallel_files * parallel_upsample
+            
+            if parallel_location == "start":
+                filenames = parallel_files + filenames
+            elif parallel_location == "end":
+                filenames += parallel_files
+            elif parallel_location == "interleave":
+                new_filenames = []
+                if slim_offset > 0:
+                    new_filenames = filenames[:slim_offset]
+                    filenames = filenames[slim_offset:]
+                
+                if ensure_last_parallel:
+                    last = parallel_files[-1:]
+                    parallel_files = parallel_files[:-1]
+                else:
+                    last = []
+                
+                num_slim = 0
+                ratio = slim_perc * len(filenames) / float(len(parallel_files))
+                for idx, parallel_file in enumerate(parallel_files):
+                    new_filenames.append(parallel_file)
+                    num_to_be_achieved = round(ratio * (idx + 1))
+                    num_to_be_added = num_to_be_achieved - num_slim
+                    slim_to_add = filenames[:num_to_be_added]
+                    new_filenames.extend(slim_to_add)
+                    num_slim += len(slim_to_add)
+                    filenames = filenames[num_to_be_added:]
+                filenames = new_filenames + filenames + last
+            elif parallel_location == "inter-last":
+                new_filenames = []
+                num_slim = 0
+                if slim_offset > 0:
+                    raise NotImplementedError("No implementation for inter-last yet")
+                elif slim_offset < 0:
+                    last = filenames[slim_offset:]
+                    filenames = filenames[:slim_offset]
+
+                ratio = slim_perc * len(filenames) / float(len(parallel_files))
+                for idx, parallel_file in enumerate(parallel_files[::-1]):
+                    new_filenames.append(parallel_file)
+                    num_to_be_achieved = round(ratio * (idx + 1))
+                    num_to_be_added = num_to_be_achieved - num_slim
+                    if num_to_be_added > 0:
+                        slim_to_add = filenames[-num_to_be_added:]
+                        new_filenames.extend(slim_to_add[::-1])
+                        num_slim += len(slim_to_add)
+                        filenames = filenames[:-num_to_be_added]
+
+                filenames = filenames + new_filenames[::-1] + last
+
+            elif parallel_location == "repeat-insert":
+                new_filenames = parallel_files
+            else:
+                raise ValueError("Unrecognized value for parallel location: {}".format(parallel_location))
         random.seed(seed)
-        random.shuffle(filenames)
+        if shuffle:
+            random.shuffle(filenames)
 
         dataset = PackedDataset(
             filenames,
@@ -341,8 +425,14 @@ def create_dataloaders(
     block_size: int,
     fabric,
     train_data_dir: Path = Path("data/redpajama_sample"),
+    parallel_data_dir: Optional[Path] = None,
+    parallel_location: str = "start",
     val_data_dir: Optional[Path] = None,
     seed: int = 12345,
+    slim_perc: float = 1.0,
+    parallel_upsample: float = 1.0,
+    slim_offset: int = 0,
+    ensure_last_parallel: bool = False,
 ) -> Tuple[DataLoader, DataLoader]:
     # Increase by one because we need the next word as well
     effective_block_size = block_size + 1
@@ -351,8 +441,14 @@ def create_dataloaders(
         block_size=effective_block_size,
         fabric=fabric,
         data_dir=train_data_dir,
-        shuffle=True,
+        parallel_data_dir=parallel_data_dir,
+        parallel_location=parallel_location,
+        shuffle=False,
         seed=seed,
+        slim_perc=slim_perc,
+        parallel_upsample=parallel_upsample,
+        slim_offset=slim_offset,
+        ensure_last_parallel=ensure_last_parallel,
         split="train"
     )
     val_dataloader = (
