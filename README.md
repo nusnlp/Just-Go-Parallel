@@ -9,7 +9,17 @@ This repository provides the code to systematically investigate the the impact o
 The codebase is built upon [TinyLlama](https://github.com/jzhang38/TinyLlama)
 
 ## Model
-Coming soon.
+* No Parallel: [nusnlp/JGP-No-Parallel](https://huggingface.co/nusnlp/JGP-No-Parallel)
+* Multilingual: [nusnlp/JGP-Multilingual](https://huggingface.co/nusnlp/JGP-Multilingual)
+* Parallel Non-Adjacent: [nusnlp/JGP-Parallel-Non-Adjacent](https://huggingface.co/nusnlp/JGP-Parallel-Non-Adjacent)
+* Parallel First: [nusnlp/JGP-Parallel-First](https://huggingface.co/nusnlp/JGP-Parallel-First)
+* Parallel Distributed: [nusnlp/JGP-Parallel-Distributed](https://huggingface.co/nusnlp/JGP-Parallel-Distributed)
+* Parallel Last (all): [nusnlp/JGP-Parallel-Last-all](https://huggingface.co/nusnlp/JGP-Parallel-Last-all)
+* Parallel Last (uni):
+  * EN→ID: [nusnlp/JGP-Parallel-Last-EN-ID](https://huggingface.co/nusnlp/JGP-Parallel-Last-EN-ID)
+  * ID→EN: [nusnlp/JGP-Parallel-Last-ID-EN](https://huggingface.co/nusnlp/JGP-Parallel-Last-ID-EN)
+  * EN→ZH: [nusnlp/JGP-Parallel-Last-EN-ZH](https://huggingface.co/nusnlp/JGP-Parallel-Last-EN-ZH)
+  * ZH→EN: [nusnlp/JGP-Parallel-Last-ZH-EN](https://huggingface.co/nusnlp/JGP-Parallel-Last-ZH-EN)
 
 ## Training Data
 Coming soon.
