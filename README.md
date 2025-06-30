@@ -22,10 +22,52 @@ The codebase is built upon [TinyLlama](https://github.com/jzhang38/TinyLlama)
   * ZH→EN: [nusnlp/JGP-Parallel-Last-ZH-EN](https://huggingface.co/nusnlp/JGP-Parallel-Last-ZH-EN)
 
 ## Training Data
-Coming soon.
+| Experiment | Datasets |
+| ---------- | --- |
+| No-Parallel | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) |
+| Multilingual | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Multilingual](https://huggingface.co/datasets/nusnlp/JGP-Multilingual) |
+| Parallel Non-Adjacent | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel-Non-Adjacent](https://huggingface.co/datasets/nusnlp/JGP-Parallel-Non-Adjacent) |
+| Parallel First, Parallel Distributed, Parallel Last (all) | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel](https://huggingface.co/datasets/nusnlp/JGP-Parallel) |
+| Parallel Last (uni): EN→ID | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel-EN-ID](https://huggingface.co/datasets/nusnlp/JGP-Parallel-EN-ID) |
+| Parallel Last (uni): ID→EN | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel-ID-EN](https://huggingface.co/datasets/nusnlp/JGP-Parallel-ID-EN) |
+| Parallel Last (uni): EN→ZH | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel-EN-ZH](https://huggingface.co/datasets/nusnlp/JGP-Parallel-EN-ZH) |
+| Parallel Last (uni): ZH→EN | [nusnlp/JGP-SlimPajama](https://huggingface.co/datasets/nusnlp/JGP-SlimPajama) + [nusnlp/JGP-Parallel-ZH-EN](https://huggingface.co/datasets/nusnlp/JGP-Parallel-ZH-EN) |
+
+## Installation
+We expect that you have CUDA>=11.8 installed.
+### Install Pytorch.
+Follow the [official guidance](https://pytorch.org/get-started/previous-versions/) to install the appropriate Pytorch version that fits the installed CUDA.
+
+### Install XFormers
+You can install the pre-built version or build from source as shown below:
+```bash
+pip uninstall ninja -y && pip install ninja -U
+pip install -v -U git+https://github.com/facebookresearch/xformers.git@main#egg=xformers
+```
+
+
+### Install Flash-Attention 2 and other fused operators:
+```bash
+git clone https://github.com/Dao-AILab/flash-attention
+cd flash-attention
+python setup.py install
+cd csrc/rotary && pip install .
+cd ../layer_norm && pip install .
+cd ../xentropy && pip install .
+cd ../.. && rm -rf flash-attention
+```
+### Install Remaining Dependencies
+Install the remaining dependencies:
+```
+pip install -r requirements.txt tokenizers sentencepiece
+```
+
+It may take ≥ 5 minutes to build XFormers/Flash-Attention. Don’t worry if the process seems stagnant or if the terminal prints many warnings.
+
+Then you are ready to go 🎉!
 
 ## Pretrain
-Please refer to [PRETRAIN.md](PRETRAIN.md) for instructions on how to pretrain our model.
+Please refer to [PRETRAIN.md](PRETRAIN.md) for instructions on reproducing the pretraining of our models.
 
 ## Evaluation
 Please use [ALMA](https://github.com/fe1ixxu/ALMA) to evaluate translation performance and [LM-Evaluation-Harness](https://github.com/EleutherAI/lm-evaluation-harness) to evaluate common-sense reasoning.
